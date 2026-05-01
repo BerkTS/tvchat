@@ -42,3 +42,5 @@ export interface Comment {
   createdAt: string;
   replyCount?: number;
 }
+
+export * from "./api-paths";

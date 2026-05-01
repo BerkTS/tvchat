@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { TVChannel, Video } from "@tvchat/shared";
 
 const demoChannel: TVChannel = {
@@ -69,10 +70,23 @@ export default function HomePage() {
         </div>
       </section>
 
+      <div className="flex flex-wrap gap-3">
+        <Link
+          href="/feed"
+          className="inline-flex items-center rounded-full bg-[var(--accent)] px-5 py-2.5 text-sm font-medium text-white hover:opacity-90"
+        >
+          Open feed
+        </Link>
+        <p className="self-center text-sm text-[var(--muted)]">
+          Run <code className="rounded bg-white/10 px-1.5 py-0.5">npm run dev:api</code>{" "}
+          then load the feed.
+        </p>
+      </div>
+
       <footer className="text-sm text-[var(--muted)]">
         Shared types from{" "}
         <code className="rounded bg-white/10 px-1.5 py-0.5">@tvchat/shared</code>
-        . Run API and uploads next; mobile app lives in{" "}
+        ; mobile app in{" "}
         <code className="rounded bg-white/10 px-1.5 py-0.5">apps/mobile</code>.
       </footer>
     </main>
