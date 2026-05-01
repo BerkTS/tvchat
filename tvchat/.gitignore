@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Build
+.next
+out
+dist
+build
+apps/api/dist
+*.tsbuildinfo
+
+# Expo
+.expo
+web-build
+
+# Env
+.env
+.env*.local
+
+# OS / IDE
+.DS_Store
+*.log
+.idea
+.vscode
+
+# Debug
+npm-debug.log*
