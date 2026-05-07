@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Comment, TVChannel, Video } from "@tvchat/shared";
 import { apiPaths } from "@tvchat/shared";
 import { getApiBase } from "@/lib/api-base";
@@ -51,6 +51,19 @@ async function postMultipart<T>(path: string, form: FormData): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function pickBrowserRecorderMime(): string {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
+  for (const c of candidates) {
+    if (MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return "";
+}
+
 export function FeedClient() {
   const [channels, setChannels] = useState<TVChannel[]>([]);
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -65,6 +78,13 @@ export function FeedClient() {
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postBusy, setPostBusy] = useState(false);
   const [postMessage, setPostMessage] = useState<string | null>(null);
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const [camOpen, setCamOpen] = useState(false);
+  const [recOn, setRecOn] = useState(false);
+  const [camHint, setCamHint] = useState<string | null>(null);
 
   const feedPath = useMemo(() => {
     const q = channelId ? `?channelId=${encodeURIComponent(channelId)}` : "";
@@ -99,6 +119,88 @@ export function FeedClient() {
   useEffect(() => {
     void loadFeed();
   }, [loadFeed]);
+
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+  }, []);
+
+  const closeWebCam = useCallback(() => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    const el = previewRef.current;
+    if (el) el.srcObject = null;
+    setCamOpen(false);
+    setRecOn(false);
+  }, []);
+
+  const openWebCam = async () => {
+    setCamHint(null);
+    setPostMessage(null);
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setCamHint("Camera is not available in this browser.");
+      return;
+    }
+    try {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: true,
+      });
+      streamRef.current = stream;
+      setCamOpen(true);
+      requestAnimationFrame(() => {
+        const el = previewRef.current;
+        if (el) {
+          el.srcObject = stream;
+          void el.play().catch(() => {});
+        }
+      });
+    } catch (e) {
+      setCamHint(e instanceof Error ? e.message : "Could not open camera.");
+    }
+  };
+
+  const startWebRecord = () => {
+    setCamHint(null);
+    const stream = streamRef.current;
+    if (!stream) {
+      setCamHint("Open the camera first.");
+      return;
+    }
+    const mime = pickBrowserRecorderMime();
+    if (!mime) {
+      setCamHint("Recording is not supported in this browser.");
+      return;
+    }
+    chunksRef.current = [];
+    const rec = new MediaRecorder(stream, { mimeType: mime });
+    recorderRef.current = rec;
+    rec.ondataavailable = (ev) => {
+      if (ev.data.size) chunksRef.current.push(ev.data);
+    };
+    rec.onstop = () => {
+      const baseType = mime.split(";")[0] || "video/webm";
+      const blob = new Blob(chunksRef.current, { type: baseType });
+      const ext = baseType.includes("webm") ? "webm" : "mp4";
+      const file = new File([blob], `camera-clip.${ext}`, { type: blob.type });
+      setPostFile(file);
+      setPostMessage("Recording ready — tap Upload & post.");
+      chunksRef.current = [];
+      recorderRef.current = null;
+      setRecOn(false);
+    };
+    rec.start(250);
+    setRecOn(true);
+  };
+
+  const stopWebRecord = () => {
+    recorderRef.current?.stop();
+  };
 
   const loadComments = async (videoId: string) => {
     if (commentsByVideo[videoId]) return;
@@ -153,7 +255,7 @@ export function FeedClient() {
 
   const submitPost = async () => {
     if (!postChannelId || !postFile) {
-      setPostMessage("Choose a channel and a video file.");
+      setPostMessage("Choose a channel, then pick or record a video.");
       return;
     }
     setPostBusy(true);
@@ -251,6 +353,55 @@ export function FeedClient() {
               placeholder="What’s this clip about?"
             />
           </label>
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <span className="text-[var(--muted)] text-sm">Record in browser</span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void openWebCam()}
+                className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/15"
+              >
+                {camOpen ? "Camera on" : "Open camera"}
+              </button>
+              <button
+                type="button"
+                onClick={closeWebCam}
+                disabled={!camOpen}
+                className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/15 disabled:opacity-40"
+              >
+                Close camera
+              </button>
+              <button
+                type="button"
+                onClick={startWebRecord}
+                disabled={!camOpen || recOn}
+                className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/15 disabled:opacity-40"
+              >
+                Start recording
+              </button>
+              <button
+                type="button"
+                onClick={stopWebRecord}
+                disabled={!recOn}
+                className="rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                Stop & attach
+              </button>
+            </div>
+            {camHint && (
+              <p className="text-xs text-amber-200/90">{camHint}</p>
+            )}
+            <video
+              ref={previewRef}
+              className="mt-1 aspect-video w-full max-w-md rounded-lg border border-white/10 bg-black object-cover"
+              muted
+              playsInline
+            />
+            <p className="text-xs text-[var(--muted)]">
+              Preview is muted to avoid feedback. Uses WebM in most Chrome / Firefox
+              builds; Safari support varies.
+            </p>
+          </div>
           <label className="flex flex-col gap-1 text-sm sm:col-span-2">
             <span className="text-[var(--muted)]">Video file</span>
             <input

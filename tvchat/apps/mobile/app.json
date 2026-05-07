@@ -15,7 +15,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tvchat.app"
+      "bundleIdentifier": "com.tvchat.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Record short video clips for TVChat.",
+        "NSMicrophoneUsageDescription": "Record audio with your TVChat video clips."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,8 +27,21 @@
         "backgroundColor": "#0a0a0b"
       },
       "package": "com.tvchat.app",
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
     },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow TVChat to access your library when picking videos.",
+          "cameraPermission": "Allow TVChat to use the camera to record clips."
+        }
+      ]
+    ],
     "extra": {
       "apiBaseUrl": "http://localhost:3001"
     }

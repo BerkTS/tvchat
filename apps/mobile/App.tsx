@@ -1,5 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -139,9 +140,39 @@ export default function App() {
     setPostMsg(null);
   };
 
+  const recordFromCamera = async () => {
+    setPostMsg(null);
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (!cam.granted) {
+      setPostMsg("Camera permission is required to record.");
+      return;
+    }
+    const mic = await ImagePicker.requestMicrophonePermissionsAsync();
+    if (!mic.granted) {
+      setPostMsg("Microphone permission is recommended for audio in your clip.");
+    }
+    const r = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      videoMaxDuration: 120,
+      allowsEditing: false,
+      quality: 1,
+    });
+    if (r.canceled) return;
+    const a = r.assets[0];
+    setPickedUri(a.uri);
+    const mime = a.mimeType ?? "video/mp4";
+    setPickedMime(mime);
+    const ext = mime.includes("webm")
+      ? "webm"
+      : mime.includes("quicktime")
+        ? "mov"
+        : "mp4";
+    setPickedName(`camera-${Date.now()}.${ext}`);
+  };
+
   const submitPost = async () => {
     if (!postChannelId || !pickedUri) {
-      setPostMsg("Pick a channel and a video file.");
+      setPostMsg("Pick a channel, then choose or record a video.");
       return;
     }
     setPostBusy(true);
@@ -210,11 +241,19 @@ export default function App() {
             value={postCaption}
             onChangeText={setPostCaption}
           />
-          <Pressable style={styles.pickBtn} onPress={() => void pickVideo()}>
-            <Text style={styles.pickBtnText}>
-              {pickedName ? `Selected: ${pickedName}` : "Choose video file"}
-            </Text>
-          </Pressable>
+          <View style={styles.pickRow}>
+            <Pressable style={styles.pickBtn} onPress={() => void pickVideo()}>
+              <Text style={styles.pickBtnText}>
+                {pickedName ? `File: ${pickedName}` : "Choose video file"}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.pickBtn}
+              onPress={() => void recordFromCamera()}
+            >
+              <Text style={styles.pickBtnText}>Record with camera</Text>
+            </Pressable>
+          </View>
           <Pressable
             style={[styles.postBtn, postBusy && styles.postBtnDisabled]}
             disabled={postBusy}
@@ -397,6 +436,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   postMeta: { color: "#a1a1aa", fontSize: 12, textTransform: "uppercase" },
+  pickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   pickBtn: {
     alignSelf: "flex-start",
     borderRadius: 10,
