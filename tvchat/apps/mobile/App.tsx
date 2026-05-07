@@ -1,4 +1,5 @@
 import { StatusBar } from "expo-status-bar";
+import * as DocumentPicker from "expo-document-picker";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -12,7 +13,7 @@ import {
   View,
 } from "react-native";
 import type { Comment, TVChannel, Video } from "@tvchat/shared";
-import { apiFetch, apiPaths, getApiBase } from "./src/api";
+import { apiFetch, apiPaths, apiUpload, getApiBase, mediaUrl } from "./src/api";
 
 export default function App() {
   const [channels, setChannels] = useState<TVChannel[]>([]);
@@ -25,6 +26,13 @@ export default function App() {
     {},
   );
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [postChannelId, setPostChannelId] = useState("");
+  const [postCaption, setPostCaption] = useState("");
+  const [pickedUri, setPickedUri] = useState<string | null>(null);
+  const [pickedName, setPickedName] = useState<string | null>(null);
+  const [pickedMime, setPickedMime] = useState("video/mp4");
+  const [postBusy, setPostBusy] = useState(false);
+  const [postMsg, setPostMsg] = useState<string | null>(null);
 
   const loadFeed = useCallback(async () => {
     setLoading(true);
@@ -45,6 +53,7 @@ export default function App() {
       try {
         const ch = await apiFetch<TVChannel[]>(apiPaths.channels);
         setChannels(ch);
+        setPostChannelId((prev) => prev || ch[0]?.id || "");
       } catch {
         setChannels([]);
       }
@@ -97,7 +106,7 @@ export default function App() {
       /* ignore */
     }
     const url = video.playbackUrl;
-    if (url) void Linking.openURL(url);
+    if (url) void Linking.openURL(mediaUrl(url));
   };
 
   const postComment = async (videoId: string) => {
@@ -117,6 +126,48 @@ export default function App() {
     }
   };
 
+  const pickVideo = async () => {
+    const r = await DocumentPicker.getDocumentAsync({
+      type: "video/*",
+      copyToCacheDirectory: true,
+    });
+    if (r.canceled) return;
+    const a = r.assets[0];
+    setPickedUri(a.uri);
+    setPickedName(a.name ?? "upload.mp4");
+    setPickedMime(a.mimeType ?? "video/mp4");
+    setPostMsg(null);
+  };
+
+  const submitPost = async () => {
+    if (!postChannelId || !pickedUri) {
+      setPostMsg("Pick a channel and a video file.");
+      return;
+    }
+    setPostBusy(true);
+    setPostMsg(null);
+    try {
+      const form = new FormData();
+      form.append("channelId", postChannelId);
+      form.append("caption", postCaption);
+      form.append("video", {
+        uri: pickedUri,
+        name: pickedName ?? "upload.mp4",
+        type: pickedMime,
+      } as unknown as Blob);
+      await apiUpload<{ video: Video }>(apiPaths.createVideo, form);
+      setPostCaption("");
+      setPickedUri(null);
+      setPickedName(null);
+      setPostMsg("Posted.");
+      await loadFeed();
+    } catch (e) {
+      setPostMsg(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setPostBusy(false);
+    }
+  };
+
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
@@ -128,6 +179,51 @@ export default function App() {
           {"\n"}
           Android emulator uses 10.0.2.2 automatically.
         </Text>
+
+        <View style={styles.postCard}>
+          <Text style={styles.postTitle}>Post a video</Text>
+          <Text style={styles.postMeta}>Channel</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.chips}
+          >
+            {channels.map((c) => (
+              <Pressable
+                key={c.id}
+                style={[styles.chip, postChannelId === c.id && styles.chipOn]}
+                onPress={() => setPostChannelId(c.id)}
+              >
+                <Text
+                  style={postChannelId === c.id ? styles.chipTextOn : styles.chipText}
+                >
+                  {c.name}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Text style={styles.postMeta}>Caption</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Caption…"
+            placeholderTextColor="#71717a"
+            value={postCaption}
+            onChangeText={setPostCaption}
+          />
+          <Pressable style={styles.pickBtn} onPress={() => void pickVideo()}>
+            <Text style={styles.pickBtnText}>
+              {pickedName ? `Selected: ${pickedName}` : "Choose video file"}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.postBtn, postBusy && styles.postBtnDisabled]}
+            disabled={postBusy}
+            onPress={() => void submitPost()}
+          >
+            <Text style={styles.postBtnText}>{postBusy ? "Uploading…" : "Upload"}</Text>
+          </Pressable>
+          {postMsg && <Text style={styles.postMsg}>{postMsg}</Text>}
+        </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chips}>
           <Pressable
@@ -158,8 +254,12 @@ export default function App() {
 
         {videos.map((v) => (
           <View key={v.id} style={styles.card}>
-            <Pressable onPress={() => v.playbackUrl && Linking.openURL(v.playbackUrl)}>
-              <Image source={{ uri: v.thumbnailUrl }} style={styles.thumb} />
+            <Pressable
+              onPress={() =>
+                v.playbackUrl && Linking.openURL(mediaUrl(v.playbackUrl))
+              }
+            >
+              <Image source={{ uri: mediaUrl(v.thumbnailUrl) }} style={styles.thumb} />
               <Text style={styles.playHint}>Tap thumbnail to open sample video</Text>
             </Pressable>
             <Text style={styles.author}>{v.author.displayName}</Text>
@@ -283,4 +383,29 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   postBtnText: { color: "#fff", fontWeight: "600" },
+  postCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    padding: 14,
+    gap: 8,
+  },
+  postTitle: {
+    color: "#fafafa",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+  postMeta: { color: "#a1a1aa", fontSize: 12, textTransform: "uppercase" },
+  pickBtn: {
+    alignSelf: "flex-start",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  pickBtnText: { color: "#e4e4e7", fontSize: 14 },
+  postBtnDisabled: { opacity: 0.6 },
+  postMsg: { color: "#a1a1aa", fontSize: 13 },
 });

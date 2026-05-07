@@ -6,8 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Comment, TVChannel, Video } from "@tvchat/shared";
 import { apiPaths } from "@tvchat/shared";
 import { getApiBase } from "@/lib/api-base";
+import { mediaUrl } from "@/lib/media-url";
 
 const USER_HEADER = "X-User-Id";
+const DISPLAY_HEADER = "X-User-Display-Name";
 const DEMO_USER = "demo-user";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -26,6 +28,29 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function postMultipart<T>(path: string, form: FormData): Promise<T> {
+  const base = getApiBase();
+  const res = await fetch(`${base}${path}`, {
+    method: "POST",
+    headers: {
+      [USER_HEADER]: DEMO_USER,
+      [DISPLAY_HEADER]: "You",
+    },
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const j = (await res.json()) as { error?: string };
+      if (j.error) detail = j.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
 export function FeedClient() {
   const [channels, setChannels] = useState<TVChannel[]>([]);
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -35,6 +60,11 @@ export function FeedClient() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [commentsByVideo, setCommentsByVideo] = useState<Record<string, Comment[]>>({});
   const [commentDraft, setCommentDraft] = useState<Record<string, string>>({});
+  const [postChannelId, setPostChannelId] = useState("");
+  const [postCaption, setPostCaption] = useState("");
+  const [postFile, setPostFile] = useState<File | null>(null);
+  const [postBusy, setPostBusy] = useState(false);
+  const [postMessage, setPostMessage] = useState<string | null>(null);
 
   const feedPath = useMemo(() => {
     const q = channelId ? `?channelId=${encodeURIComponent(channelId)}` : "";
@@ -59,6 +89,7 @@ export function FeedClient() {
       try {
         const ch = await fetchJson<TVChannel[]>(apiPaths.channels);
         setChannels(ch);
+        setPostChannelId((prev) => prev || ch[0]?.id || "");
       } catch {
         setChannels([]);
       }
@@ -120,6 +151,30 @@ export function FeedClient() {
     }
   };
 
+  const submitPost = async () => {
+    if (!postChannelId || !postFile) {
+      setPostMessage("Choose a channel and a video file.");
+      return;
+    }
+    setPostBusy(true);
+    setPostMessage(null);
+    try {
+      const form = new FormData();
+      form.set("channelId", postChannelId);
+      form.set("caption", postCaption);
+      form.set("video", postFile, postFile.name);
+      await postMultipart<{ video: Video }>(apiPaths.createVideo, form);
+      setPostCaption("");
+      setPostFile(null);
+      setPostMessage("Posted.");
+      await loadFeed();
+    } catch (e) {
+      setPostMessage(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setPostBusy(false);
+    }
+  };
+
   const postComment = async (videoId: string) => {
     const body = (commentDraft[videoId] ?? "").trim();
     if (!body) return;
@@ -148,7 +203,7 @@ export function FeedClient() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Feed</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Filter by TV channel. Like, share, and comment call the local API.
+            Filter by TV channel. Post a clip, then like, share, or comment.
           </p>
         </div>
         <label className="flex flex-col gap-1 text-sm">
@@ -167,6 +222,64 @@ export function FeedClient() {
           </select>
         </label>
       </div>
+
+      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <h2 className="text-sm font-medium text-[var(--muted)] uppercase">
+          Post a video
+        </h2>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[var(--muted)]">Channel</span>
+            <select
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-[var(--foreground)] outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
+              value={postChannelId}
+              onChange={(e) => setPostChannelId(e.target.value)}
+            >
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+            <span className="text-[var(--muted)]">Caption</span>
+            <input
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-[var(--foreground)] outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
+              value={postCaption}
+              onChange={(e) => setPostCaption(e.target.value)}
+              placeholder="What’s this clip about?"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+            <span className="text-[var(--muted)]">Video file</span>
+            <input
+              type="file"
+              accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.mov,.webm,.mkv"
+              className="text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-[var(--foreground)]"
+              onChange={(e) => setPostFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            disabled={postBusy}
+            onClick={() => void submitPost()}
+            className="rounded-full bg-[var(--accent)] px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {postBusy ? "Uploading…" : "Upload & post"}
+          </button>
+          {postMessage && (
+            <span className="text-sm text-[var(--muted)]">{postMessage}</span>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Max ~200&nbsp;MB. Formats: MP4, WebM, MOV, MKV. For phones, set{" "}
+          <code className="rounded bg-black/30 px-1">API_PUBLIC_ORIGIN</code> on
+          the API so playback URLs resolve on your LAN.
+        </p>
+      </section>
 
       {loading && (
         <p className="text-sm text-[var(--muted)]">Loading feed…</p>
@@ -188,8 +301,8 @@ export function FeedClient() {
             <div className="relative aspect-[9/16] max-h-[70vh] w-full bg-black sm:mx-auto sm:max-w-md">
               <video
                 className="h-full w-full object-cover"
-                src={v.playbackUrl}
-                poster={v.thumbnailUrl}
+                src={mediaUrl(v.playbackUrl)}
+                poster={mediaUrl(v.thumbnailUrl)}
                 controls
                 playsInline
                 preload="metadata"
@@ -198,8 +311,9 @@ export function FeedClient() {
             <div className="flex gap-4 p-4">
               <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-white/10">
                 <Image
-                  src={v.thumbnailUrl}
+                  src={mediaUrl(v.thumbnailUrl)}
                   alt=""
+                  unoptimized={v.thumbnailUrl.startsWith("/uploads/")}
                   fill
                   className="object-cover"
                   sizes="56px"
