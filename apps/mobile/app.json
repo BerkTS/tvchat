@@ -33,15 +33,6 @@
         "RECORD_AUDIO"
       ]
     },
-    "plugins": [
-      [
-        "expo-image-picker",
-        {
-          "photosPermission": "Allow TVChat to access your library when picking videos.",
-          "cameraPermission": "Allow TVChat to use the camera to record clips."
-        }
-      ]
-    ],
     "extra": {
       "apiBaseUrl": "http://localhost:3001"
     }
