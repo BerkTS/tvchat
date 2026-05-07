@@ -1,8 +1,14 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { Readable } from "node:stream";
 import type { Comment, Video } from "@tvchat/shared";
 import { seedChannels, seedComments, seedVideos } from "./seed";
+import {
+  ensureUploadDir,
+  openUploadStream,
+  saveUploadedVideo,
+} from "./uploads";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -12,6 +18,12 @@ const likedPairs = new Map<string, Set<string>>();
 
 function userIdFrom(c: { req: { header: (k: string) => string | undefined } }) {
   return c.req.header("x-user-id")?.trim() || "demo-user";
+}
+
+function displayNameFrom(c: {
+  req: { header: (k: string) => string | undefined };
+}) {
+  return c.req.header("x-user-display-name")?.trim() || "You";
 }
 
 function likedBy(videoId: string, userId: string): boolean {
@@ -33,13 +45,71 @@ app.use(
       "http://localhost:8081",
       "http://127.0.0.1:8081",
     ],
-    allowHeaders: ["Content-Type", "X-User-Id"],
+    allowHeaders: ["Content-Type", "X-User-Id", "X-User-Display-Name"],
   }),
 );
 
 app.get("/health", (c) => c.json({ ok: true }));
 
 app.get("/channels", (c) => c.json(seedChannels));
+
+app.get("/uploads/:name", async (c) => {
+  const name = c.req.param("name");
+  const result = await openUploadStream(name);
+  if (!result) return c.json({ error: "not_found" }, 404);
+
+  return new Response(Readable.toWeb(result.stream), {
+    headers: {
+      "Content-Type": result.mime,
+      "Cache-Control": "public, max-age=86400",
+    },
+  });
+});
+
+app.post("/videos", async (c) => {
+  const userId = userIdFrom(c);
+  const who = displayNameFrom(c);
+
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch {
+    return c.json({ error: "invalid_form" }, 400);
+  }
+
+  const channelId = String(form.get("channelId") ?? "");
+  const caption = String(form.get("caption") ?? "");
+  const file = form.get("video");
+
+  if (!(file instanceof File)) {
+    return c.json({ error: "no_file" }, 400);
+  }
+
+  let video: Video;
+  try {
+    video = await saveUploadedVideo({
+      file,
+      channelId,
+      caption,
+      userId,
+      displayName: who,
+    });
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "upload_failed";
+    const status =
+      code === "unknown_channel"
+        ? 400
+        : code === "file_too_large"
+          ? 413
+          : code === "unsupported_type"
+            ? 415
+            : 400;
+    return c.json({ error: code }, status);
+  }
+
+  videos.unshift(video);
+  return c.json({ video: withViewerFlags(video, userId) }, 201);
+});
 
 app.get("/feed", (c) => {
   const channelId = c.req.query("channelId");
@@ -131,5 +201,6 @@ app.post("/videos/:id/comments", async (c) => {
   );
 });
 
+await ensureUploadDir();
 serve({ fetch: app.fetch, port: PORT });
 console.log(`TVChat API listening on http://localhost:${PORT}`);

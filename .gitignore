@@ -9,6 +9,7 @@ out
 dist
 build
 apps/api/dist
+apps/api/uploads
 *.tsbuildinfo
 
 # Expo
