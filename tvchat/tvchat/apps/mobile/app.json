@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "TVChat",
+    "slug": "tvchat",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "tvchat",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0b"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tvchat.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0b"
+      },
+      "package": "com.tvchat.app",
+      "usesCleartextTraffic": true
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:3001"
+    }
+  }
+}
