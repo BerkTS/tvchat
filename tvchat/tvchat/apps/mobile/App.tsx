@@ -1,6 +1,4 @@
 import { StatusBar } from "expo-status-bar";
-import * as DocumentPicker from "expo-document-picker";
-import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -128,7 +126,8 @@ export default function App() {
   };
 
   const pickVideo = async () => {
-    const r = await DocumentPicker.getDocumentAsync({
+    const { getDocumentAsync } = await import("expo-document-picker");
+    const r = await getDocumentAsync({
       type: "video/*",
       copyToCacheDirectory: true,
     });
@@ -142,6 +141,7 @@ export default function App() {
 
   const recordFromCamera = async () => {
     setPostMsg(null);
+    const ImagePicker = await import("expo-image-picker");
     const cam = await ImagePicker.requestCameraPermissionsAsync();
     if (!cam.granted) {
       setPostMsg("Camera permission is required to record.");
@@ -202,7 +202,12 @@ export default function App() {
   return (
     <View style={styles.root}>
       <StatusBar style="light" />
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.scrollInner}>
         <Text style={styles.kicker}>TVChat</Text>
         <Text style={styles.title}>Feed</Text>
         <Text style={styles.hint}>
@@ -339,6 +344,7 @@ export default function App() {
             )}
           </View>
         ))}
+        </View>
       </ScrollView>
     </View>
   );
@@ -346,7 +352,9 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0a0a0b" },
-  scroll: { padding: 16, paddingTop: 48, gap: 12, paddingBottom: 40 },
+  scrollView: { flex: 1 },
+  scrollContent: { flexGrow: 1, paddingBottom: 40 },
+  scrollInner: { padding: 16, paddingTop: 48, gap: 12 },
   kicker: {
     color: "#a1a1aa",
     fontSize: 11,
