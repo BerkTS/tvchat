@@ -1,5 +1,7 @@
 /** Domain types shared by web and mobile clients. */
 
+import type { CaptionTrack } from "./captions";
+
 export type ID = string;
 
 export interface TVChannel {
@@ -32,6 +34,13 @@ export interface Video {
   commentCount: number;
   shareCount: number;
   likedByViewer?: boolean;
+  /** Timed subtitles (WebVTT URLs, usually under `/uploads/`). */
+  captionTracks?: CaptionTrack[];
+  /** Background auto-caption job (Whisper / translate). */
+  captionGeneration?: {
+    status: "idle" | "pending" | "ready" | "failed";
+    message?: string;
+  };
 }
 
 export interface Comment {
@@ -44,3 +53,4 @@ export interface Comment {
 }
 
 export * from "./api-paths";
+export * from "./captions";

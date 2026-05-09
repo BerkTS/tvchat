@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Comment, TVChannel, Video } from "@tvchat/shared";
+import type { CaptionTrack, Comment, TVChannel, Video } from "@tvchat/shared";
 import { apiPaths } from "@tvchat/shared";
 import { getApiBase } from "@/lib/api-base";
 import { mediaUrl } from "@/lib/media-url";
@@ -51,6 +51,126 @@ async function postMultipart<T>(path: string, form: FormData): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function SubtitledPlayer({ video: v }: { video: Video }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const tracks: CaptionTrack[] = useMemo(
+    () => v.captionTracks ?? [],
+    [v.captionTracks],
+  );
+  const [ccOn, setCcOn] = useState(false);
+  const [lang, setLang] = useState(tracks[0]?.lang ?? "");
+
+  useEffect(() => {
+    if (tracks.length && !tracks.some((t) => t.lang === lang)) {
+      setLang(tracks[0]!.lang);
+    }
+  }, [tracks, lang]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const sync = () => {
+      const tts = el.textTracks;
+      for (let i = 0; i < tts.length; i++) {
+        const tt = tts[i];
+        if (!ccOn) {
+          tt.mode = "disabled";
+          continue;
+        }
+        const trackLang = (tracks[i]?.lang ?? tt.language) || "";
+        tt.mode = trackLang === lang ? "showing" : "hidden";
+      }
+    };
+    el.addEventListener("loadedmetadata", sync);
+    el.addEventListener("loadeddata", sync);
+    const ttl = el.textTracks;
+    ttl.addEventListener?.("addtrack", sync as EventListener);
+    ttl.addEventListener?.("change", sync as EventListener);
+    sync();
+    return () => {
+      el.removeEventListener("loadedmetadata", sync);
+      el.removeEventListener("loadeddata", sync);
+      ttl.removeEventListener?.("addtrack", sync as EventListener);
+      ttl.removeEventListener?.("change", sync as EventListener);
+    };
+  }, [ccOn, lang, tracks]);
+
+  const gen = v.captionGeneration;
+  const hasTracks = tracks.length > 0;
+
+  return (
+    <div className="relative aspect-[9/16] max-h-[70vh] w-full bg-black sm:mx-auto sm:max-w-md">
+      <video
+        ref={ref}
+        className="h-full w-full object-cover"
+        src={mediaUrl(v.playbackUrl)}
+        poster={mediaUrl(v.thumbnailUrl)}
+        controls
+        playsInline
+        preload="metadata"
+      >
+        {tracks.map((t) => (
+          <track
+            key={t.lang}
+            kind="subtitles"
+            srcLang={t.lang}
+            label={t.label}
+            src={mediaUrl(t.url)}
+          />
+        ))}
+      </video>
+      {gen?.status === "pending" && (
+        <div className="pointer-events-none absolute left-2 right-2 top-2 rounded-lg bg-black/70 px-2 py-1 text-center text-xs text-white/95">
+          {gen.message ?? "Captions…"}
+        </div>
+      )}
+      {gen?.status === "failed" && (
+        <div className="pointer-events-none absolute left-2 right-2 top-2 rounded-lg bg-red-950/80 px-2 py-1 text-center text-xs text-red-100">
+          {gen.message ?? "Captions failed"}
+        </div>
+      )}
+      <div className="absolute bottom-14 left-0 right-0 flex flex-wrap items-center justify-center gap-2 px-2">
+        <button
+          type="button"
+          disabled={!hasTracks}
+          title={
+            hasTracks
+              ? ccOn
+                ? "Hide subtitles"
+                : "Show subtitles"
+              : "Subtitles not ready yet (or unavailable)"
+          }
+          onClick={() => hasTracks && setCcOn((x) => !x)}
+          className={`rounded-full px-3 py-1 text-xs font-medium ${
+            !hasTracks
+              ? "cursor-not-allowed bg-black/40 text-white/50 backdrop-blur"
+              : ccOn
+                ? "bg-[var(--accent)] text-white"
+                : "bg-black/60 text-white/90 backdrop-blur"
+          }`}
+        >
+          CC
+        </button>
+        {tracks.length > 1 ? (
+          <select
+            className="max-w-[12rem] rounded-full border-0 bg-black/60 px-3 py-1 text-xs text-white backdrop-blur outline-none disabled:opacity-40"
+            value={lang}
+            disabled={!hasTracks}
+            onChange={(e) => setLang(e.target.value)}
+            aria-label="Subtitle language"
+          >
+            {tracks.map((t) => (
+              <option key={t.lang} value={t.lang}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function pickBrowserRecorderMime(): string {
   if (typeof MediaRecorder === "undefined") return "";
   const candidates = [
@@ -76,9 +196,12 @@ export function FeedClient() {
   const [postChannelId, setPostChannelId] = useState("");
   const [postCaption, setPostCaption] = useState("");
   const [postFile, setPostFile] = useState<File | null>(null);
+  const [postSubFile, setPostSubFile] = useState<File | null>(null);
+  const [postSubLang, setPostSubLang] = useState("en");
   const [postBusy, setPostBusy] = useState(false);
   const [postMessage, setPostMessage] = useState<string | null>(null);
   const previewRef = useRef<HTMLVideoElement>(null);
+  const subtitlesInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -119,6 +242,17 @@ export function FeedClient() {
   useEffect(() => {
     void loadFeed();
   }, [loadFeed]);
+
+  const pendingCaptions = useMemo(
+    () => videos.some((x) => x.captionGeneration?.status === "pending"),
+    [videos],
+  );
+
+  useEffect(() => {
+    if (!pendingCaptions) return;
+    const t = window.setInterval(() => void loadFeed(), 4000);
+    return () => clearInterval(t);
+  }, [pendingCaptions, loadFeed]);
 
   useEffect(() => {
     return () => {
@@ -265,9 +399,14 @@ export function FeedClient() {
       form.set("channelId", postChannelId);
       form.set("caption", postCaption);
       form.set("video", postFile, postFile.name);
+      if (postSubFile) {
+        form.set("subtitles", postSubFile, postSubFile.name);
+        form.set("subtitleLang", postSubLang.trim() || "en");
+      }
       await postMultipart<{ video: Video }>(apiPaths.createVideo, form);
       setPostCaption("");
       setPostFile(null);
+      setPostSubFile(null);
       setPostMessage("Posted.");
       await loadFeed();
     } catch (e) {
@@ -387,6 +526,14 @@ export function FeedClient() {
               >
                 Stop & attach
               </button>
+              <button
+                type="button"
+                title="Attach a WebVTT subtitle file (optional)"
+                onClick={() => subtitlesInputRef.current?.click()}
+                className="rounded-full bg-white/10 px-4 py-2 text-sm hover:bg-white/15"
+              >
+                Captions
+              </button>
             </div>
             {camHint && (
               <p className="text-xs text-amber-200/90">{camHint}</p>
@@ -411,6 +558,34 @@ export function FeedClient() {
               onChange={(e) => setPostFile(e.target.files?.[0] ?? null)}
             />
           </label>
+          <label className="flex flex-col gap-1 text-sm sm:col-span-2">
+            <span className="text-[var(--muted)]">
+              Subtitles (optional WebVTT)
+            </span>
+            <input
+              ref={subtitlesInputRef}
+              type="file"
+              accept=".vtt,text/vtt"
+              className="text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-[var(--foreground)]"
+              onChange={(e) => setPostSubFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-[var(--muted)]">Subtitle language code</span>
+            <input
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-[var(--foreground)] outline-none focus:ring-2 focus:ring-[var(--accent)]/40"
+              value={postSubLang}
+              onChange={(e) => setPostSubLang(e.target.value)}
+              placeholder="en"
+            />
+          </label>
+          <p className="text-xs text-[var(--muted)] sm:col-span-2">
+            Spoken audio is transcribed automatically (original language) after
+            each upload. Requires{" "}
+            <code className="rounded bg-black/30 px-1">OPENAI_API_KEY</code> on the
+            API; clips over ~25&nbsp;MB are not sent to Whisper. Use CC on the video
+            to show or hide subtitles.
+          </p>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
@@ -426,7 +601,8 @@ export function FeedClient() {
           )}
         </div>
         <p className="mt-2 text-xs text-[var(--muted)]">
-          Max ~200&nbsp;MB. Formats: MP4, WebM, MOV, MKV. For phones, set{" "}
+          Max ~200&nbsp;MB video; WebVTT subtitles max 2&nbsp;MB. Formats: MP4,
+          WebM, MOV, MKV. For phones, set{" "}
           <code className="rounded bg-black/30 px-1">API_PUBLIC_ORIGIN</code> on
           the API so playback URLs resolve on your LAN.
         </p>
@@ -449,16 +625,7 @@ export function FeedClient() {
             key={v.id}
             className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]"
           >
-            <div className="relative aspect-[9/16] max-h-[70vh] w-full bg-black sm:mx-auto sm:max-w-md">
-              <video
-                className="h-full w-full object-cover"
-                src={mediaUrl(v.playbackUrl)}
-                poster={mediaUrl(v.thumbnailUrl)}
-                controls
-                playsInline
-                preload="metadata"
-              />
-            </div>
+            <SubtitledPlayer video={v} />
             <div className="flex gap-4 p-4">
               <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-white/10">
                 <Image

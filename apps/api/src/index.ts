@@ -1,16 +1,32 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { Comment, Video } from "@tvchat/shared";
-import { seedChannels, seedComments, seedVideos } from "./seed";
+import { scheduleAutoCaptions } from "./captions-service.js";
+import { seedChannels, seedComments, seedVideos } from "./seed.js";
 import {
   ensureUploadDir,
   openUploadStream,
   saveUploadedVideo,
-} from "./uploads";
+  UPLOAD_DIR,
+} from "./uploads.js";
 
 const PORT = Number(process.env.PORT) || 3001;
+
+/** Demo WEBVTT for seed video `vid-1` (written on startup). */
+const DEMO_SEED_VTT = `WEBVTT
+
+1
+00:00:00.000 --> 00:00:04.000
+Tonight's headline in 30 seconds.
+
+2
+00:00:04.000 --> 00:00:12.000
+From the channel feed — stay tuned.
+`;
 
 const videos: Video[] = structuredClone(seedVideos);
 const comments: Comment[] = structuredClone(seedComments);
@@ -58,7 +74,7 @@ app.get("/uploads/:name", async (c) => {
   const result = await openUploadStream(name);
   if (!result) return c.json({ error: "not_found" }, 404);
 
-  return new Response(Readable.toWeb(result.stream), {
+  return new Response(Readable.toWeb(result.stream) as BodyInit, {
     headers: {
       "Content-Type": result.mime,
       "Cache-Control": "public, max-age=86400",
@@ -80,26 +96,40 @@ app.post("/videos", async (c) => {
   const channelId = String(form.get("channelId") ?? "");
   const caption = String(form.get("caption") ?? "");
   const file = form.get("video");
+  const subtitlesRaw = form.get("subtitles");
+  const subtitlesFile =
+    subtitlesRaw instanceof File && subtitlesRaw.size > 0 ? subtitlesRaw : null;
+  const subtitleLang = String(form.get("subtitleLang") ?? "").trim();
+
+  /** Extra translated tracks only via server env (default: original language only). */
+  const translateLangs = (process.env.AUTO_CAPTION_TRANSLATE_LANGS ?? "")
+    .split(/[,\s]+/)
+    .filter(Boolean);
 
   if (!(file instanceof File)) {
     return c.json({ error: "no_file" }, 400);
   }
 
   let video: Video;
+  let absPath: string;
   try {
-    video = await saveUploadedVideo({
+    const saved = await saveUploadedVideo({
       file,
       channelId,
       caption,
       userId,
       displayName: who,
+      subtitlesFile,
+      subtitleLang: subtitleLang || undefined,
     });
+    video = saved.video;
+    absPath = saved.absPath;
   } catch (e) {
     const code = e instanceof Error ? e.message : "upload_failed";
     const status =
       code === "unknown_channel"
         ? 400
-        : code === "file_too_large"
+        : code === "file_too_large" || code === "subtitles_too_large"
           ? 413
           : code === "unsupported_type"
             ? 415
@@ -108,6 +138,10 @@ app.post("/videos", async (c) => {
   }
 
   videos.unshift(video);
+  scheduleAutoCaptions(video, absPath, {
+    whisperLanguage: undefined,
+    translateLangs,
+  });
   return c.json({ video: withViewerFlags(video, userId) }, 201);
 });
 
@@ -202,5 +236,6 @@ app.post("/videos/:id/comments", async (c) => {
 });
 
 await ensureUploadDir();
+await writeFile(join(UPLOAD_DIR, "vid-1.en.vtt"), DEMO_SEED_VTT, "utf8");
 serve({ fetch: app.fetch, port: PORT });
 console.log(`TVChat API listening on http://localhost:${PORT}`);

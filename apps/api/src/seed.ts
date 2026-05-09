@@ -1,4 +1,5 @@
 import type { Comment, TVChannel, Video } from "@tvchat/shared";
+import { captionLanguageLabel } from "@tvchat/shared";
 
 const sampleMp4 =
   "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
@@ -38,6 +39,14 @@ export const seedVideos: Video[] = [
     likeCount: 4200,
     commentCount: 2,
     shareCount: 89,
+    captionTracks: [
+      {
+        lang: "en",
+        label: captionLanguageLabel("en"),
+        url: "/uploads/vid-1.en.vtt",
+      },
+    ],
+    captionGeneration: { status: "idle" },
   },
   {
     id: "vid-2",

@@ -3,8 +3,9 @@ import { createReadStream } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Video } from "@tvchat/shared";
-import { seedChannels } from "./seed";
+import type { CaptionTrack, Video } from "@tvchat/shared";
+import { captionLanguageLabel } from "@tvchat/shared";
+import { seedChannels } from "./seed.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -12,6 +13,7 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 export const UPLOAD_DIR = join(__dirname, "..", "uploads");
 
 const MAX_BYTES = 200 * 1024 * 1024;
+const MAX_VTT_BYTES = 2 * 1024 * 1024;
 
 const MIME_BY_EXT: Record<string, string> = {
   ".mp4": "video/mp4",
@@ -19,6 +21,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ".mov": "video/quicktime",
   ".mkv": "video/x-matroska",
   ".m4v": "video/x-m4v",
+  ".vtt": "text/vtt",
 };
 
 function safeFilename(name: string): string {
@@ -30,14 +33,29 @@ export async function ensureUploadDir(): Promise<void> {
   await mkdir(UPLOAD_DIR, { recursive: true });
 }
 
+function normalizeSubtitleLang(raw: string | undefined): string {
+  const t = (raw ?? "en").trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
+  return (t.slice(0, 2) || "en") as string;
+}
+
 export async function saveUploadedVideo(params: {
   file: File;
   channelId: string;
   caption: string;
   userId: string;
   displayName: string;
-}): Promise<Video> {
-  const { file, channelId, caption, userId, displayName } = params;
+  subtitlesFile?: File | null;
+  subtitleLang?: string;
+}): Promise<{ video: Video; absPath: string }> {
+  const {
+    file,
+    channelId,
+    caption,
+    userId,
+    displayName,
+    subtitlesFile,
+    subtitleLang,
+  } = params;
 
   const channel = seedChannels.find((c) => c.id === channelId);
   if (!channel) {
@@ -50,7 +68,7 @@ export async function saveUploadedVideo(params: {
 
   const orig = safeFilename(file.name);
   const ext = extname(orig).toLowerCase() || ".mp4";
-  if (!MIME_BY_EXT[ext]) {
+  if (!MIME_BY_EXT[ext] || ext === ".vtt") {
     throw new Error("unsupported_type");
   }
 
@@ -65,7 +83,30 @@ export async function saveUploadedVideo(params: {
 
   const publicPath = `/uploads/${storedName}`;
 
-  return {
+  const captionTracks: CaptionTrack[] = [];
+
+  if (subtitlesFile && subtitlesFile.size > 0) {
+    if (subtitlesFile.size > MAX_VTT_BYTES) {
+      throw new Error("subtitles_too_large");
+    }
+    const subName = safeFilename(subtitlesFile.name);
+    const subExt = extname(subName).toLowerCase();
+    if (subExt !== ".vtt") {
+      throw new Error("subtitles_must_be_vtt");
+    }
+    const lang = normalizeSubtitleLang(subtitleLang);
+    const vttName = `${id}.${lang}.vtt`;
+    const vttPath = join(UPLOAD_DIR, vttName);
+    const vttBuf = Buffer.from(await subtitlesFile.arrayBuffer());
+    await writeFile(vttPath, vttBuf);
+    captionTracks.push({
+      lang,
+      label: captionLanguageLabel(lang),
+      url: `/uploads/${vttName}`,
+    });
+  }
+
+  const video: Video = {
     id,
     channelId,
     author: {
@@ -81,7 +122,11 @@ export async function saveUploadedVideo(params: {
     likeCount: 0,
     commentCount: 0,
     shareCount: 0,
+    captionTracks: captionTracks.length ? captionTracks : undefined,
+    captionGeneration: { status: "idle" },
   };
+
+  return { video, absPath: diskPath };
 }
 
 export function getUploadMime(filename: string): string {
